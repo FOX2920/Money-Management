@@ -1,416 +1,193 @@
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, date
-import json
 import requests
-from io import BytesIO
+import json
+import os
+from datetime import datetime, date
+import pandas as pd
 
 # Cấu hình trang
 st.set_page_config(
-    page_title="Quản lý Thu Chi Cá nhân",
+    page_title="Quản lý Thu Chi Cá Nhân",
     page_icon="💰",
     layout="wide"
 )
 
-# CSS để làm đẹp giao diện
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 5px solid #1f77b4;
-    }
-    .income-card {
-        border-left-color: #2ca02c;
-    }
-    .expense-card {
-        border-left-color: #d62728;
-    }
-    .balance-card {
-        border-left-color: #ff7f0e;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Lấy URL từ environment variable
+SHEET_URL_KEY = os.getenv('SHEET_URL_KEY')
 
-# Khởi tạo session state
-if 'transactions' not in st.session_state:
-    st.session_state.transactions = []
+if not SHEET_URL_KEY:
+    st.error("❌ Vui lòng thiết lập biến môi trường SHEET_URL_KEY")
+    st.stop()
 
-if 'monthly_budget' not in st.session_state:
-    st.session_state.monthly_budget = {
-        'salary': 0,
-        'food': 0,
-        'transport': 0,
-        'accommodation': 0,
-        'utilities': 0,
-        'miscellaneous': 0
-    }
+# Danh mục thu chi
+INCOME_CATEGORIES = ["Lương"]
+EXPENSE_CATEGORIES = [
+    "Tiền ăn",
+    "Tiền xăng di chuyển", 
+    "Tiền trọ",
+    "Tiền điện",
+    "Tiền nước",
+    "Tiền mạng 4G",
+    "Sửa xe",
+    "Y tế",
+    "Dịch vụ mạng",
+    "Khác"
+]
 
-# Header
-st.markdown('<h1 class="main-header">💰 Quản lý Thu Chi Cá nhân</h1>', unsafe_allow_html=True)
-
-# Sidebar cho navigation
-st.sidebar.title("📋 Menu")
-page = st.sidebar.selectbox("Chọn chức năng", [
-    "📊 Tổng quan", 
-    "➕ Thêm giao dịch", 
-    "📈 Báo cáo", 
-    "⚙️ Cài đặt ngân sách",
-    "📤 Xuất dữ liệu"
-])
-
-# Hàm thêm giao dịch
-def add_transaction(date, category, subcategory, amount, description, type_):
-    transaction = {
-        'date': date.strftime('%Y-%m-%d'),
-        'category': category,
-        'subcategory': subcategory,
-        'amount': amount,
-        'description': description,
-        'type': type_,
-        'month': date.strftime('%Y-%m')
-    }
-    st.session_state.transactions.append(transaction)
-
-# Hàm tính toán thống kê
-def get_monthly_stats(month=None):
-    df = pd.DataFrame(st.session_state.transactions)
-    if df.empty:
-        return 0, 0, 0
-    
-    if month:
-        df = df[df['month'] == month]
-    
-    income = df[df['type'] == 'Thu'].groupby('month')['amount'].sum().sum() if not df.empty else 0
-    expense = df[df['type'] == 'Chi'].groupby('month')['amount'].sum().sum() if not df.empty else 0
-    balance = income - expense
-    
-    return income, expense, balance
-
-# Hàm xuất dữ liệu cho Google Apps Script
-def export_to_json():
-    data = {
-        'transactions': st.session_state.transactions,
-        'budget': st.session_state.monthly_budget,
-        'export_date': datetime.now().isoformat()
-    }
-    return json.dumps(data, ensure_ascii=False, indent=2)
-
-# Trang Tổng quan
-if page == "📊 Tổng quan":
-    st.header("📊 Tổng quan tài chính")
-    
-    # Thống kê tháng hiện tại
-    current_month = datetime.now().strftime('%Y-%m')
-    income, expense, balance = get_monthly_stats(current_month)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown('<div class="metric-card income-card">', unsafe_allow_html=True)
-        st.metric("💰 Thu nhập tháng này", f"{income:,.0f} VNĐ")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown('<div class="metric-card expense-card">', unsafe_allow_html=True)
-        st.metric("💸 Chi tiêu tháng này", f"{expense:,.0f} VNĐ")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown('<div class="metric-card balance-card">', unsafe_allow_html=True)
-        st.metric("📊 Số dư", f"{balance:,.0f} VNĐ")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Biểu đồ tròn chi tiêu theo danh mục
-    if st.session_state.transactions:
-        df = pd.DataFrame(st.session_state.transactions)
-        df_current = df[df['month'] == current_month]
-        
-        if not df_current.empty:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📊 Chi tiêu theo danh mục (tháng này)")
-                expense_data = df_current[df_current['type'] == 'Chi']
-                if not expense_data.empty:
-                    expense_by_category = expense_data.groupby('category')['amount'].sum()
-                    fig_pie = px.pie(
-                        values=expense_by_category.values,
-                        names=expense_by_category.index,
-                        title="Phân bố chi tiêu"
-                    )
-                    st.plotly_chart(fig_pie, use_container_width=True)
-            
-            with col2:
-                st.subheader("📈 Xu hướng thu chi")
-                monthly_data = df.groupby(['month', 'type'])['amount'].sum().reset_index()
-                if not monthly_data.empty:
-                    fig_line = px.line(
-                        monthly_data,
-                        x='month',
-                        y='amount',
-                        color='type',
-                        title="Xu hướng thu chi theo tháng"
-                    )
-                    st.plotly_chart(fig_line, use_container_width=True)
-    
-    # Giao dịch gần đây
-    st.subheader("🕒 Giao dịch gần đây")
-    if st.session_state.transactions:
-        recent_transactions = pd.DataFrame(st.session_state.transactions).tail(10)
-        recent_transactions['amount_formatted'] = recent_transactions['amount'].apply(lambda x: f"{x:,.0f} VNĐ")
-        st.dataframe(
-            recent_transactions[['date', 'type', 'category', 'description', 'amount_formatted']].rename(columns={
-                'date': 'Ngày',
-                'type': 'Loại',
-                'category': 'Danh mục',
-                'description': 'Mô tả',
-                'amount_formatted': 'Số tiền'
-            }),
-            use_container_width=True
-        )
-    else:
-        st.info("Chưa có giao dịch nào được ghi nhận.")
-
-# Trang Thêm giao dịch
-elif page == "➕ Thêm giao dịch":
-    st.header("➕ Thêm giao dịch mới")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        transaction_date = st.date_input("📅 Ngày giao dịch", value=date.today())
-        transaction_type = st.selectbox("📊 Loại giao dịch", ["Thu", "Chi"])
-        
-        if transaction_type == "Thu":
-            category = st.selectbox("💰 Danh mục thu", ["Lương", "Thưởng", "Thu nhập khác"])
-            subcategory = st.text_input("📝 Danh mục con (tùy chọn)")
+def send_to_sheet(data):
+    """Gửi dữ liệu đến Google Apps Script"""
+    try:
+        response = requests.post(SHEET_URL_KEY, json=data, timeout=30)
+        if response.status_code == 200:
+            return True, "Dữ liệu đã được cập nhật thành công!"
         else:
-            category = st.selectbox("💸 Danh mục chi", [
-                "Ăn uống", 
-                "Di chuyển", 
-                "Trọ/Nhà ở", 
-                "Điện nước", 
-                "Phí phát sinh",
-                "Chi tiêu khác"
-            ])
-            
-            subcategory_options = {
-                "Ăn uống": ["Ăn sáng", "Ăn trưa", "Ăn tối", "Đồ uống", "Ăn vặt"],
-                "Di chuyển": ["Xăng xe", "Xe bus", "Grab/Taxi", "Sửa xe"],
-                "Trọ/Nhà ở": ["Tiền thuê", "Tiền cọc", "Chi phí khác"],
-                "Điện nước": ["Tiền điện", "Tiền nước", "Internet", "Gas"],
-                "Phí phát sinh": ["Y tế", "Mua sắm", "Giải trí", "Khác"],
-                "Chi tiêu khác": ["Khác"]
-            }
-            
-            subcategory = st.selectbox("📝 Danh mục con", subcategory_options.get(category, ["Khác"]))
+            return False, f"Lỗi: {response.status_code} - {response.text}"
+    except Exception as e:
+        return False, f"Lỗi kết nối: {str(e)}"
+
+def main():
+    st.title("💰 Quản Lý Thu Chi Cá Nhân")
     
-    with col2:
-        amount = st.number_input("💵 Số tiền (VNĐ)", min_value=0, step=1000)
-        description = st.text_area("📝 Mô tả", placeholder="Nhập mô tả cho giao dịch...")
+    # Sidebar để chọn tháng/năm
+    with st.sidebar:
+        st.header("📅 Chọn thời gian")
+        selected_month = st.selectbox(
+            "Tháng:",
+            range(1, 13),
+            index=datetime.now().month - 1,
+            format_func=lambda x: f"Tháng {x}"
+        )
+        selected_year = st.selectbox(
+            "Năm:",
+            range(2020, 2030),
+            index=datetime.now().year - 2020
+        )
         
-        if st.button("✅ Thêm giao dịch", type="primary"):
-            if amount > 0:
-                add_transaction(transaction_date, category, subcategory, amount, description, transaction_type)
-                st.success(f"✅ Đã thêm giao dịch {transaction_type.lower()} {amount:,.0f} VNĐ!")
-                st.rerun()
+        sheet_name = f"{selected_month:02d}/{selected_year}"
+        st.info(f"📊 Sheet hiện tại: **{sheet_name}**")
+
+    # Tabs chính
+    tab1, tab2, tab3 = st.tabs(["💵 Thu Nhập", "💸 Chi Tiêu", "📊 Báo Cáo"])
+    
+    # Tab Thu Nhập
+    with tab1:
+        st.header("💵 Ghi Nhận Thu Nhập")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            income_date = st.date_input("📅 Ngày:", key="income_date")
+            income_category = st.selectbox("📂 Danh mục:", INCOME_CATEGORIES, key="income_category")
+        
+        with col2:
+            income_amount = st.number_input("💰 Số tiền (VNĐ):", min_value=0, step=1000, key="income_amount")
+            income_note = st.text_input("📝 Ghi chú:", key="income_note")
+        
+        if st.button("✅ Thêm Thu Nhập", type="primary"):
+            if income_amount > 0:
+                data = {
+                    "action": "add_transaction",
+                    "sheet_name": sheet_name,
+                    "transaction": {
+                        "date": income_date.strftime("%Y-%m-%d"),
+                        "type": "Thu",
+                        "category": income_category,
+                        "amount": income_amount,
+                        "note": income_note
+                    }
+                }
+                
+                success, message = send_to_sheet(data)
+                if success:
+                    st.success(message)
+                else:
+                    st.error(message)
             else:
                 st.error("❌ Vui lòng nhập số tiền hợp lệ!")
 
-# Trang Báo cáo
-elif page == "📈 Báo cáo":
-    st.header("📈 Báo cáo chi tiết")
-    
-    if st.session_state.transactions:
-        df = pd.DataFrame(st.session_state.transactions)
+    # Tab Chi Tiêu
+    with tab2:
+        st.header("💸 Ghi Nhận Chi Tiêu")
         
-        # Bộ lọc
-        col1, col2, col3 = st.columns(3)
-        
+        col1, col2 = st.columns(2)
         with col1:
-            months = sorted(df['month'].unique(), reverse=True)
-            selected_month = st.selectbox("📅 Chọn tháng", ["Tất cả"] + months)
+            expense_date = st.date_input("📅 Ngày:", key="expense_date")
+            expense_category = st.selectbox("📂 Danh mục:", EXPENSE_CATEGORIES, key="expense_category")
         
         with col2:
-            types = st.multiselect("📊 Loại giao dịch", ["Thu", "Chi"], default=["Thu", "Chi"])
+            expense_amount = st.number_input("💰 Số tiền (VNĐ):", min_value=0, step=1000, key="expense_amount")
+            expense_note = st.text_input("📝 Ghi chú:", key="expense_note")
         
-        with col3:
-            categories = st.multiselect("📝 Danh mục", df['category'].unique(), default=df['category'].unique())
-        
-        # Lọc dữ liệu
-        filtered_df = df.copy()
-        if selected_month != "Tất cả":
-            filtered_df = filtered_df[filtered_df['month'] == selected_month]
-        if types:
-            filtered_df = filtered_df[filtered_df['type'].isin(types)]
-        if categories:
-            filtered_df = filtered_df[filtered_df['category'].isin(categories)]
-        
-        # Hiển thị báo cáo
-        if not filtered_df.empty:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📊 Tổng kết")
-                summary = filtered_df.groupby('type')['amount'].sum()
-                for type_, amount in summary.items():
-                    st.metric(f"{type} nhập" if type_ == "Thu" else f"{type} tiêu", f"{amount:,.0f} VNĐ")
-            
-            with col2:
-                st.subheader("📈 Biểu đồ cột theo danh mục")
-                category_data = filtered_df.groupby(['category', 'type'])['amount'].sum().reset_index()
-                fig_bar = px.bar(
-                    category_data,
-                    x='category',
-                    y='amount',
-                    color='type',
-                    title="Thu chi theo danh mục"
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
-            
-            # Bảng chi tiết
-            st.subheader("📋 Chi tiết giao dịch")
-            filtered_df['amount_formatted'] = filtered_df['amount'].apply(lambda x: f"{x:,.0f} VNĐ")
-            st.dataframe(
-                filtered_df[['date', 'type', 'category', 'subcategory', 'description', 'amount_formatted']].rename(columns={
-                    'date': 'Ngày',
-                    'type': 'Loại',
-                    'category': 'Danh mục',
-                    'subcategory': 'Danh mục con',
-                    'description': 'Mô tả',
-                    'amount_formatted': 'Số tiền'
-                }).sort_values('Ngày', ascending=False),
-                use_container_width=True
-            )
-        else:
-            st.info("Không có dữ liệu phù hợp với bộ lọc.")
-    else:
-        st.info("Chưa có dữ liệu để hiển thị báo cáo.")
-
-# Trang Cài đặt ngân sách
-elif page == "⚙️ Cài đặt ngân sách":
-    st.header("⚙️ Cài đặt ngân sách hàng tháng")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("💰 Thu nhập")
-        st.session_state.monthly_budget['salary'] = st.number_input(
-            "Lương hàng tháng (VNĐ)", 
-            value=st.session_state.monthly_budget['salary'],
-            step=100000
-        )
-    
-    with col2:
-        st.subheader("💸 Ngân sách chi tiêu")
-        st.session_state.monthly_budget['food'] = st.number_input(
-            "Ăn uống (VNĐ)", 
-            value=st.session_state.monthly_budget['food'],
-            step=50000
-        )
-        st.session_state.monthly_budget['transport'] = st.number_input(
-            "Di chuyển (VNĐ)", 
-            value=st.session_state.monthly_budget['transport'],
-            step=50000
-        )
-        st.session_state.monthly_budget['accommodation'] = st.number_input(
-            "Trọ/Nhà ở (VNĐ)", 
-            value=st.session_state.monthly_budget['accommodation'],
-            step=100000
-        )
-        st.session_state.monthly_budget['utilities'] = st.number_input(
-            "Điện nước (VNĐ)", 
-            value=st.session_state.monthly_budget['utilities'],
-            step=50000
-        )
-        st.session_state.monthly_budget['miscellaneous'] = st.number_input(
-            "Phí phát sinh (VNĐ)", 
-            value=st.session_state.monthly_budget['miscellaneous'],
-            step=50000
-        )
-    
-    total_budget = sum([v for k, v in st.session_state.monthly_budget.items() if k != 'salary'])
-    st.metric("💰 Tổng ngân sách chi tiêu", f"{total_budget:,.0f} VNĐ")
-    
-    if st.session_state.monthly_budget['salary'] > 0:
-        saving_rate = (st.session_state.monthly_budget['salary'] - total_budget) / st.session_state.monthly_budget['salary'] * 100
-        st.metric("📈 Tỷ lệ tiết kiệm dự kiến", f"{saving_rate:.1f}%")
-
-# Trang Xuất dữ liệu
-elif page == "📤 Xuất dữ liệu":
-    st.header("📤 Xuất dữ liệu")
-    
-    st.subheader("🔗 Tích hợp với Google Sheets")
-    st.info("""
-    Để tích hợp với Google Sheets:
-    1. Tạo Google Apps Script với code bên dưới
-    2. Deploy as Web App
-    3. Nhập URL Web App vào ô bên dưới
-    4. Nhấn 'Gửi dữ liệu' để cập nhật Google Sheets
-    """)
-    
-    webapp_url = st.text_input("🔗 URL Google Apps Script Web App")
-    
-    if st.button("📤 Gửi dữ liệu lên Google Sheets"):
-        if webapp_url and st.session_state.transactions:
-            try:
+        if st.button("✅ Thêm Chi Tiêu", type="primary"):
+            if expense_amount > 0:
                 data = {
-                    'transactions': st.session_state.transactions,
-                    'budget': st.session_state.monthly_budget
+                    "action": "add_transaction",
+                    "sheet_name": sheet_name,
+                    "transaction": {
+                        "date": expense_date.strftime("%Y-%m-%d"),
+                        "type": "Chi",
+                        "category": expense_category,
+                        "amount": expense_amount,
+                        "note": expense_note
+                    }
                 }
-                response = requests.post(webapp_url, json=data)
-                if response.status_code == 200:
-                    st.success("✅ Đã gửi dữ liệu thành công!")
+                
+                success, message = send_to_sheet(data)
+                if success:
+                    st.success(message)
                 else:
-                    st.error(f"❌ Lỗi: {response.status_code}")
+                    st.error(message)
+            else:
+                st.error("❌ Vui lòng nhập số tiền hợp lệ!")
+
+    # Tab Báo Cáo
+    with tab3:
+        st.header("📊 Báo Cáo Tháng " + sheet_name)
+        
+        col1, col2 = st.columns(2)
+        
+        if st.button("🔄 Lấy Báo Cáo", type="primary"):
+            data = {
+                "action": "get_summary",
+                "sheet_name": sheet_name
+            }
+            
+            try:
+                response = requests.post(SHEET_URL_KEY, json=data, timeout=30)
+                if response.status_code == 200:
+                    summary_data = response.json()
+                    
+                    with col1:
+                        st.metric("💵 Tổng Thu", f"{summary_data.get('total_income', 0):,} VNĐ")
+                        st.metric("💸 Tổng Chi", f"{summary_data.get('total_expense', 0):,} VNĐ")
+                    
+                    with col2:
+                        balance = summary_data.get('total_income', 0) - summary_data.get('total_expense', 0)
+                        st.metric("💰 Số Dư", f"{balance:,} VNĐ", delta=balance)
+                    
+                    # Hiển thị chi tiết theo danh mục
+                    if 'expense_by_category' in summary_data:
+                        st.subheader("📈 Chi Tiết Chi Tiêu Theo Danh Mục")
+                        
+                        expense_df = pd.DataFrame(
+                            list(summary_data['expense_by_category'].items()),
+                            columns=['Danh Mục', 'Số Tiền']
+                        )
+                        expense_df['Số Tiền'] = expense_df['Số Tiền'].apply(lambda x: f"{x:,} VNĐ")
+                        st.dataframe(expense_df, use_container_width=True)
+                    
+                else:
+                    st.error("❌ Không thể lấy báo cáo!")
+                    
             except Exception as e:
                 st.error(f"❌ Lỗi kết nối: {str(e)}")
-        elif not webapp_url:
-            st.error("❌ Vui lòng nhập URL Web App!")
-        else:
-            st.error("❌ Không có dữ liệu để gửi!")
-    
-    st.subheader("💾 Xuất file")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📁 Tải xuống JSON"):
-            if st.session_state.transactions:
-                json_data = export_to_json()
-                st.download_button(
-                    label="💾 Tải file JSON",
-                    data=json_data,
-                    file_name=f"thu_chi_{datetime.now().strftime('%Y%m%d')}.json",
-                    mime="application/json"
-                )
-            else:
-                st.error("❌ Không có dữ liệu để xuất!")
-    
-    with col2:
-        if st.button("📊 Tải xuống CSV"):
-            if st.session_state.transactions:
-                df = pd.DataFrame(st.session_state.transactions)
-                csv = df.to_csv(index=False, encoding='utf-8-sig')
-                st.download_button(
-                    label="💾 Tải file CSV",
-                    data=csv,
-                    file_name=f"thu_chi_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.error("❌ Không có dữ liệu để xuất!")
 
-# Footer
-st.markdown("---")
-st.markdown("💡 **Mẹo**: Hãy nhập giao dịch thường xuyên để theo dõi tài chính hiệu quả!")
+    # Footer
+    st.markdown("---")
+    st.markdown("💡 **Hướng dẫn sử dụng:**")
+    st.markdown("1. Thiết lập biến môi trường `SHEET_URL_KEY` với URL Google Apps Script")
+    st.markdown("2. Chọn tháng/năm ở sidebar")
+    st.markdown("3. Thêm thu nhập và chi tiêu trong các tab tương ứng")
+    st.markdown("4. Xem báo cáo trong tab 'Báo Cáo'")
+
+if __name__ == "__main__":
+    main()
